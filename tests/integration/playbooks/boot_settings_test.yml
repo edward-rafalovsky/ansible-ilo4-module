@@ -1,0 +1,145 @@
+---
+- name: Test iLO Boot Settings Management
+  hosts: ilo_server
+  gather_facts: no
+  vars:
+    ansible_debug: yes
+    ansible_verbose_override: yes
+    ansible_verbosity: 4
+  collections:
+    - hpe.ilo_ssh
+  
+  tasks:
+    - name: Debug verbosity settings
+      debug:
+        msg: "Debug enabled: {{ ansible_debug }}, Verbose override: {{ ansible_verbose_override }}, Verbosity: {{ ansible_verbosity }}"
+        verbosity: 0
+
+    # Get initial boot settings
+    - name: Get initial boot settings
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: initial_settings
+
+    - name: Debug initial settings
+      debug:
+        var: initial_settings
+        verbosity: 0
+
+    # Test boot mode settings
+    - name: Set UEFI boot mode
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        boot_mode: UEFI
+        state: present
+      register: uefi_result
+
+    - name: Debug UEFI result
+      debug:
+        var: uefi_result
+        verbosity: 0
+
+    - name: Verify UEFI mode
+      assert:
+        that:
+          - uefi_result.settings.boot_mode == 'UEFI' or uefi_result.settings.pending_boot_mode == 'UEFI'
+        fail_msg: "Failed to set UEFI mode"
+        success_msg: "UEFI mode set successfully"
+
+    # Test boot sources settings - используем только Generic USB Boot как первый источник
+    - name: Set boot sources order
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        boot_sources:
+          - "Generic USB Boot"
+        state: present
+      register: boot_sources_result
+
+    - name: Debug boot sources result
+      debug:
+        var: boot_sources_result
+        verbosity: 0
+
+    - name: Verify boot sources
+      assert:
+        that:
+          - boot_sources_result.settings.boot_sources | length > 0
+          - boot_sources_result.settings.boot_sources[0] == "Generic USB Boot"
+          # Не проверяем остальные источники, так как они могут отличаться на разных серверах
+        fail_msg: "Failed to set boot sources order"
+        success_msg: "Boot sources order set successfully"
+
+    # Test one-time boot settings
+    - name: Set one-time network boot
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        one_time_boot: netdev1
+        state: present
+      register: one_time_boot_result
+
+    - name: Debug one-time boot result
+      debug:
+        var: one_time_boot_result
+        verbosity: 0
+
+    - name: Verify one-time boot
+      assert:
+        that:
+          - one_time_boot_result.settings.one_time_boot == 'netdev1'
+        fail_msg: "Failed to set one-time boot source"
+        success_msg: "One-time boot source set successfully"
+
+    # Reset one-time boot
+    - name: Reset one-time boot
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        one_time_boot: none
+        state: present
+      register: reset_boot_result
+
+    - name: Debug reset boot result
+      debug:
+        var: reset_boot_result
+        verbosity: 0
+
+    - name: Verify reset boot
+      assert:
+        that:
+          - reset_boot_result.settings.one_time_boot == 'none'
+        fail_msg: "Failed to reset one-time boot source"
+        success_msg: "One-time boot source reset successfully"
+
+    # Restore initial settings
+    - name: Restore initial boot settings
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        boot_mode: "{{ initial_settings.settings.boot_mode }}"
+        boot_sources: "{{ initial_settings.settings.boot_sources }}"
+        state: present
+      register: restore_result
+
+    - name: Debug restore result
+      debug:
+        var: restore_result
+        verbosity: 0
+
+    - name: Verify restore
+      assert:
+        that:
+          - restore_result.settings.boot_mode == initial_settings.settings.boot_mode or restore_result.settings.pending_boot_mode == initial_settings.settings.boot_mode
+          - restore_result.settings.boot_sources == initial_settings.settings.boot_sources
+        fail_msg: "Failed to restore initial settings"
+        success_msg: "Initial settings restored successfully" 

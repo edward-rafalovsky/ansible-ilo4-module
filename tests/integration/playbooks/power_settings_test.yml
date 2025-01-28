@@ -1,0 +1,88 @@
+---
+- name: Test iLO Power Settings Management
+  hosts: all
+  gather_facts: no
+  
+  tasks:
+    # Get initial settings
+    - name: Get initial power settings
+      ilo_power_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+      register: initial_settings
+
+    - name: Show initial settings
+      debug:
+        var: initial_settings
+
+    # Test power regulator settings
+    - name: Set power regulator to OS control mode
+      ilo_power_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        power_reg_mode: os
+      register: power_reg_result
+
+    - name: Show power regulator change result
+      debug:
+        var: power_reg_result
+
+    - name: Verify power regulator mode
+      ilo_power_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+      register: verify_power_reg
+      
+    - name: Assert power regulator mode changed
+      assert:
+        that:
+          - verify_power_reg.settings.power_reg_mode == "os"
+        fail_msg: "Power regulator mode was not set to OS control"
+        success_msg: "Power regulator mode successfully set to OS control"
+
+    # Test auto power settings
+    - name: Set auto power with 30 second delay
+      ilo_power_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        auto_power: '30'
+      register: auto_power_result
+
+    - name: Show auto power change result
+      debug:
+        var: auto_power_result
+
+    - name: Verify auto power settings
+      ilo_power_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+      register: verify_auto_power
+
+    - name: Assert auto power settings changed
+      assert:
+        that:
+          - verify_auto_power.settings.auto_power == "30"
+        fail_msg: "Auto power settings were not set correctly"
+        success_msg: "Auto power settings successfully configured"
+
+    # Return to initial settings
+    - name: Restore initial power regulator mode
+      ilo_power_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        power_reg_mode: "{{ initial_settings.settings.power_reg_mode }}"
+      when: initial_settings.settings.power_reg_mode is defined
+
+    - name: Restore initial auto power settings
+      ilo_power_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        auto_power: "{{ initial_settings.settings.auto_power }}"
+      when: initial_settings.settings.auto_power is defined 

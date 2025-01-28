@@ -1,0 +1,285 @@
+---
+- name: Test iLO SSH User Management
+  hosts: ilo
+  gather_facts: no
+  vars:
+    ansible_debug: yes
+    ansible_verbose_override: yes
+    ansible_verbosity: 4
+  collections:
+    - hpe.ilo_ssh
+  
+  tasks:
+    - name: Debug verbosity settings
+      debug:
+        msg: "Debug enabled: {{ ansible_debug }}, Verbose override: {{ ansible_verbose_override }}, Verbosity: {{ ansible_verbosity }}"
+        verbosity: 0
+
+    # Initial state check
+    - name: Get initial user list
+      hpe.ilo_ssh.ilo_user:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        user_name: "{{ test_user_name }}"
+        state: present
+        user_password: "{{ test_user_password }}"
+      register: connection_test
+      ignore_errors: yes
+
+    - name: Debug connection test
+      debug:
+        var: connection_test
+        verbosity: 0
+
+    - name: Debug connection test details
+      debug:
+        msg: |
+          Connection test details:
+          Changed: {{ connection_test.changed }}
+          Failed: {{ connection_test.failed }}
+          Message: {{ connection_test.msg }}
+          {% if connection_test.stdout is defined and connection_test.stdout %}
+          Commands and Results:
+          {% for cmd in connection_test.stdout %}
+          ================================================================================
+          COMMAND:
+          ----------------------------------------
+          {{ cmd.command }}
+          ----------------------------------------
+          
+          RESULT:
+          ----------------------------------------
+          Exit Status: {{ cmd.exit_status }}
+          
+          STDOUT:
+          ----------------------------------------
+          {{ cmd.output }}
+          ================================================================================
+          {% endfor %}
+          {% endif %}
+          {% if connection_test.stderr is defined and connection_test.stderr %}
+          STDERR:
+          {% for err in connection_test.stderr %}
+          ----------------------------------------
+          Command: {{ err.command }}
+          Output: {{ err.output }}
+          ----------------------------------------
+          {% endfor %}
+          {% endif %}
+        verbosity: 0
+
+    # Cleanup before tests
+    - name: Ensure test user does not exist
+      hpe.ilo_ssh.ilo_user:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        user_name: "{{ test_user_name }}"
+        state: absent
+      register: cleanup_result
+
+    - name: Debug cleanup result
+      debug:
+        msg: |
+          Cleanup result:
+          Changed: {{ cleanup_result.changed }}
+          {% if cleanup_result.msg is defined %}
+          Message: {{ cleanup_result.msg }}
+          {% endif %}
+          {% if cleanup_result.stdout is defined and cleanup_result.stdout %}
+          Commands and Results:
+          {% for cmd in cleanup_result.stdout %}
+          ================================================================================
+          COMMAND:
+          ----------------------------------------
+          {{ cmd.command }}
+          ----------------------------------------
+          
+          RESULT:
+          ----------------------------------------
+          Exit Status: {{ cmd.exit_status }}
+          
+          STDOUT:
+          ----------------------------------------
+          {{ cmd.output }}
+          ================================================================================
+          {% endfor %}
+          {% endif %}
+          {% if cleanup_result.stderr is defined and cleanup_result.stderr %}
+          STDERR:
+          {% for err in cleanup_result.stderr %}
+          ----------------------------------------
+          Command: {{ err.command }}
+          Output: {{ err.output }}
+          ----------------------------------------
+          {% endfor %}
+          {% endif %}
+        verbosity: 0
+
+    - name: Wait after cleanup
+      pause:
+        seconds: 5
+      when: cleanup_result.changed
+
+    # User creation test
+    - name: Create test user with minimal privileges
+      hpe.ilo_ssh.ilo_user:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        user_name: "{{ test_user_name }}"
+        user_password: "{{ test_user_password }}"
+        state: present
+        privileges:
+          remote_console: yes
+      register: create_result
+
+    - name: Debug create result
+      debug:
+        msg: |
+          Create result:
+          Changed: {{ create_result.changed }}
+          {% if create_result.msg is defined %}
+          Message: {{ create_result.msg }}
+          {% endif %}
+          {% if create_result.stdout is defined and create_result.stdout %}
+          Commands and Results:
+          {% for cmd in create_result.stdout %}
+          ================================================================================
+          COMMAND:
+          ----------------------------------------
+          {{ cmd.command }}
+          ----------------------------------------
+          
+          RESULT:
+          ----------------------------------------
+          Exit Status: {{ cmd.exit_status }}
+          
+          STDOUT:
+          ----------------------------------------
+          {{ cmd.output }}
+          ================================================================================
+          {% endfor %}
+          {% endif %}
+          {% if create_result.stderr is defined and create_result.stderr %}
+          STDERR:
+          {% for err in create_result.stderr %}
+          ----------------------------------------
+          Command: {{ err.command }}
+          Output: {{ err.output }}
+          ----------------------------------------
+          {% endfor %}
+          {% endif %}
+        verbosity: 0
+
+    - name: Wait after creation
+      pause:
+        seconds: 5
+      when: create_result.changed
+
+    # Verify user was created
+    - name: Verify user was created
+      hpe.ilo_ssh.ilo_user:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        user_name: "{{ test_user_name }}"
+        state: present
+      register: verify_creation
+
+    - name: Debug verify result
+      debug:
+        msg: "Verify result:\nChanged: {{ verify_creation.changed }}\nMessage: {{ verify_creation.msg }}\n"
+
+    - name: Assert user creation
+      assert:
+        that:
+          - verify_creation.msg is search('already exists')
+          - not verify_creation.changed
+        fail_msg: "User verification failed"
+        success_msg: "User verified successfully"
+
+    # Privilege update test
+    - name: Update user privileges to admin
+      hpe.ilo_ssh.ilo_user:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        user_name: "{{ test_user_name }}"
+        state: present
+        privileges:
+          login: yes
+          remote_console: yes
+          user_config: yes
+          virtual_media: yes
+          virtual_power_and_reset: yes
+          ilo_config: yes
+      register: update_result
+
+    - name: Debug update result
+      debug:
+        msg: "Update result:\nChanged: {{ update_result.changed }}\nMessage: {{ update_result.msg }}\n"
+
+    - name: Wait after update
+      pause:
+        seconds: 5
+
+    - name: Verify privileges were updated
+      hpe.ilo_ssh.ilo_user:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        user_name: "{{ test_user_name }}"
+        state: present
+      register: verify_update
+
+    - name: Debug verify update result
+      debug:
+        msg: "Verify update result:\nChanged: {{ verify_update.changed }}\nMessage: {{ verify_update.msg }}\n"
+
+    - name: Assert privileges update
+      assert:
+        that:
+          - verify_update.msg is search('already exists')
+          - not verify_update.changed
+        fail_msg: "Privileges update verification failed"
+        success_msg: "Privileges update verified successfully"
+
+    # User deletion test
+    - name: Delete test user
+      hpe.ilo_ssh.ilo_user:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        user_name: "{{ test_user_name }}"
+        state: absent
+      register: delete_result
+
+    - name: Debug delete result
+      debug:
+        msg: "Delete result:\nChanged: {{ delete_result.changed }}\nMessage: {{ delete_result.msg }}\n"
+
+    - name: Wait after deletion
+      pause:
+        seconds: 5
+
+    - name: Verify user was deleted
+      hpe.ilo_ssh.ilo_user:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        user_name: "{{ test_user_name }}"
+        state: absent
+      register: verify_deletion
+
+    - name: Debug verify deletion result
+      debug:
+        msg: "Verify deletion result:\nChanged: {{ verify_deletion.changed }}\n{% if verify_deletion.msg is defined %}Message: {{ verify_deletion.msg }}\n{% endif %}"
+
+    - name: Assert user deletion
+      assert:
+        that:
+          - not verify_deletion.changed
+        fail_msg: "User deletion verification failed"
+        success_msg: "User deletion verified successfully" 

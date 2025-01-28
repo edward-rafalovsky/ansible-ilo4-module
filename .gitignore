@@ -1,0 +1,6 @@
+.env
+HPE_sd00001038en_us_HPE iLO 4 2.82 User Guide.pdf
+ilo_manual.mak
+# Temporary files and directories
+ilo_ssh
+.vscode

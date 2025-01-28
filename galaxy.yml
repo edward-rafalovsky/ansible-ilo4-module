@@ -1,0 +1,29 @@
+namespace: hpe
+name: ilo_ssh
+version: 1.0.0
+readme: README.md
+authors:
+  - Edward Rafalovsky <edward.rafalovsky@gmail.com>
+description: HPE iLO management via SSH
+license:
+  - MIT
+
+tags:
+  - hpe
+  - ilo
+  - infrastructure
+  - server
+  - management
+
+repository: https://github.com/rafalovsky/ansible-ilo4-module
+documentation: https://github.com/rafalovsky/ansible-ilo4-module/tree/main/docs
+homepage: https://github.com/rafalovsky/ansible-ilo4-module
+issues: https://github.com/rafalovsky/ansible-ilo4-module/issues
+
+build_ignore:
+  - '*.tar.gz'
+  - .git
+  - .gitignore
+  - .env
+  - .env.example
+  - tests/integration/inventory/hosts.yml 

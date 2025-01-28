@@ -1,0 +1,149 @@
+---
+- name: Test iLO RAID Management
+  hosts: ilo_server
+  gather_facts: no
+  
+  tasks:
+    - name: Get supported commands
+      hpe.ilo_ssh.ilo_raid:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        controller: "{{ controller }}"
+        state: get_commands
+      register: commands_result
+
+    - name: Show supported commands
+      ansible.builtin.debug:
+        msg: "{{ commands_result }}"
+        verbosity: 1
+
+    - name: Get RAID configuration
+      hpe.ilo_ssh.ilo_raid:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        controller: "{{ controller }}"
+        state: get
+      register: raid_result
+
+    - name: Show RAID configuration
+      ansible.builtin.debug:
+        msg: "{{ raid_result }}"
+        verbosity: 1
+
+    - name: Verify RAID configuration
+      assert:
+        that:
+          - raid_result.raid_info.status == "OK"
+          - raid_result.raid_info.controllers | length > 0
+        success_msg: "Successfully retrieved RAID configuration"
+        fail_msg: "Failed to retrieve RAID configuration"
+
+    - name: Get physical drives
+      hpe.ilo_ssh.ilo_raid:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        controller: "{{ controller }}"
+        state: get_drives
+      register: drives_result
+
+    - name: Show physical drives
+      ansible.builtin.debug:
+        msg: "{{ drives_result }}"
+        verbosity: 1
+
+    - name: Verify physical drives
+      assert:
+        that:
+          - drives_result.raid_info.status == "OK"
+          - drives_result.raid_info.physical_drives is defined
+          - drives_result.raid_info.physical_drives | length > 0
+          - drives_result.raid_info.backplane is defined
+          - drives_result.raid_info.zone_table is defined
+          - not drives_result.raid_info.backplane or drives_result.raid_info.backplane.type_id is defined
+          - not drives_result.raid_info.backplane or drives_result.raid_info.backplane.bay_cnt is defined
+          - not drives_result.raid_info.backplane or drives_result.raid_info.backplane.host_ports is defined
+          - not drives_result.raid_info.zone_table or drives_result.raid_info.zone_table.host_ports is defined
+        success_msg: "Successfully retrieved physical drives information"
+        fail_msg: "Failed to retrieve drive information"
+
+    # Проверяем поддержку команд создания RAID
+    - name: Check if controller supports RAID creation
+      set_fact:
+        supports_raid_creation: "{{ 'present' in commands_result.raid_info.controllers[0].supported_commands }}"
+
+    - name: Show RAID creation support
+      debug:
+        msg: "Controller {{ controller }} {{ 'supports' if supports_raid_creation else 'does not support' }} RAID creation"
+
+    # Создаем RAID том только если контроллер поддерживает эту функцию
+    - name: Create RAID 1 volume
+      hpe.ilo_ssh.ilo_raid:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        controller: "{{ controller }}"
+        state: present
+        raid_level: "1"
+        drives: 
+          - "1I:1:1"
+          - "1I:1:2"
+        volume_name: "Test_Volume"
+        size_gb: 100
+      register: create_result
+      when: supports_raid_creation | bool
+
+    - name: Show create volume result
+      ansible.builtin.debug:
+        msg: "{{ create_result }}"
+        verbosity: 1
+      when: supports_raid_creation | bool
+
+    - name: Verify volume creation
+      assert:
+        that:
+          - create_result.changed == true
+          - create_result.raid_info.status == "OK"
+        success_msg: "Successfully created RAID volume"
+        fail_msg: "Failed to create RAID volume"
+      when: supports_raid_creation | bool
+
+    # Пропускаем тест если контроллер не поддерживает создание RAID
+    - name: Skip RAID creation test
+      debug:
+        msg: "Skipping RAID creation test - controller does not support RAID creation via RIBCL"
+      when: not supports_raid_creation | bool
+
+    - name: Delete RAID volume
+      hpe.ilo_ssh.ilo_raid:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        controller: "{{ controller }}"
+        state: absent
+        volume_name: "Test_Volume"
+      register: delete_result
+      when: supports_raid_creation | bool
+
+    - name: Show delete volume result
+      ansible.builtin.debug:
+        msg: "{{ delete_result }}"
+        verbosity: 1
+      when: supports_raid_creation | bool
+
+    - name: Verify volume deletion
+      assert:
+        that:
+          - delete_result.changed == true
+          - delete_result.raid_info.status == "OK"
+        success_msg: "Successfully deleted RAID volume"
+        fail_msg: "Failed to delete RAID volume"
+      when: supports_raid_creation | bool
+
+    # Пропускаем тест если контроллер не поддерживает удаление RAID
+    - name: Skip RAID deletion test
+      debug:
+        msg: "Skipping RAID deletion test - controller does not support RAID management via RIBCL"
+      when: not supports_raid_creation | bool 

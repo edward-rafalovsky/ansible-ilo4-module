@@ -1,0 +1,183 @@
+---
+- name: Test iLO Virtual Media Management
+  hosts: ilo
+  gather_facts: no
+  
+  vars:
+    test_iso_url: "{{ lookup('env', 'TEST_ISO_URL') | default('http://192.168.1.1/ubuntu-22.04-autoinstall.iso', true) }}"
+    invalid_url: "ftp://invalid/test.iso"
+    nonexistent_url: "http://nonexistent.example.com/test.iso"
+    verbosity: "{{ lookup('env', 'VERBOSITY') | default(0, true) }}"
+    
+  tasks:
+    - name: Debug test configuration
+      debug:
+        msg: 
+          - "Testing with ISO URL: {{ test_iso_url }}"
+          - "Verbosity level: {{ verbosity }}"
+        verbosity: 1
+
+    # 1. Basic Operations Tests
+    
+    - name: Get initial virtual media status
+      hpe.ilo_ssh.ilo_virtual_media:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: initial_result
+      
+    - name: Debug initial status
+      debug:
+        var: initial_result
+        verbosity: "{{ verbosity }}"
+
+    # Test CD/DVD operations
+        
+    - name: Mount ISO image with boot option
+      hpe.ilo_ssh.ilo_virtual_media:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        device_type: cdrom
+        image_url: "{{ test_iso_url }}"
+        boot_on_next_reset: true
+        state: present
+      register: mount_result
+      
+    - name: Debug mount result
+      debug:
+        var: mount_result
+        verbosity: "{{ verbosity }}"
+        
+    - name: Verify mount status
+      assert:
+        that:
+          - mount_result.changed == true
+          - mount_result.status.image_url == test_iso_url
+          - mount_result.status.connected == true
+          - mount_result.status.boot_on_next_reset == true
+        fail_msg: "Failed to mount ISO image"
+        success_msg: "ISO image mounted successfully"
+        
+    - name: Try mounting same image again (idempotency check)
+      hpe.ilo_ssh.ilo_virtual_media:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        device_type: cdrom
+        image_url: "{{ test_iso_url }}"
+        boot_on_next_reset: true
+        state: present
+      register: idempotency_result
+      
+    - name: Debug idempotency result
+      debug:
+        var: idempotency_result
+        verbosity: "{{ verbosity }}"
+        
+    - name: Verify idempotency
+      assert:
+        that:
+          - idempotency_result.changed == false
+          - idempotency_result.status.image_url == test_iso_url
+          - idempotency_result.status.connected == true
+          - idempotency_result.status.boot_on_next_reset == true
+        fail_msg: "Idempotency check failed"
+        success_msg: "Idempotency check passed"
+
+    - name: Unmount CD/DVD
+      hpe.ilo_ssh.ilo_virtual_media:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        device_type: cdrom
+        state: absent
+      register: unmount_result
+
+    - name: Debug unmount result
+      debug:
+        var: unmount_result
+        verbosity: "{{ verbosity }}"
+
+    - name: Verify unmount status
+      assert:
+        that:
+          - unmount_result.changed == true
+          - unmount_result.status.image_url == None
+          - unmount_result.status.connected == false
+          - unmount_result.status.boot_on_next_reset == false
+        fail_msg: "Failed to unmount CD/DVD"
+        success_msg: "CD/DVD unmounted successfully"
+
+    # Test error handling
+
+    - name: Try mounting with invalid URL format (should fail)
+      hpe.ilo_ssh.ilo_virtual_media:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        device_type: cdrom
+        image_url: "{{ invalid_url }}"
+        state: present
+      register: invalid_url_result
+      ignore_errors: true
+
+    - name: Verify invalid URL error
+      assert:
+        that:
+          - invalid_url_result.failed == true
+          - "'Invalid URL format' in invalid_url_result.msg"
+        fail_msg: "Invalid URL format not caught properly"
+        success_msg: "Invalid URL format caught successfully"
+
+    - name: Try mounting nonexistent URL (should fail)
+      hpe.ilo_ssh.ilo_virtual_media:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        device_type: cdrom
+        image_url: "{{ nonexistent_url }}"
+        state: present
+      register: nonexistent_url_result
+      ignore_errors: true
+
+    - name: Verify nonexistent URL error
+      assert:
+        that:
+          - nonexistent_url_result.failed == true
+          - "'not accessible' in nonexistent_url_result.msg"
+        fail_msg: "Nonexistent URL error not caught properly"
+        success_msg: "Nonexistent URL error caught successfully"
+
+    # Final cleanup
+
+    - name: Final cleanup - Unmount device
+      hpe.ilo_ssh.ilo_virtual_media:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        device_type: cdrom
+        state: absent
+
+    - name: Verify final state
+      hpe.ilo_ssh.ilo_virtual_media:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: final_result
+
+    - name: Debug final state
+      debug:
+        var: final_result
+        verbosity: "{{ verbosity }}"
+
+    - name: Verify device is unmounted
+      assert:
+        that:
+          - not final_result.status.connected
+          - not final_result.status.image_url
+          - not final_result.status.boot_on_next_reset
+        fail_msg: "Final cleanup failed - device still mounted"
+        success_msg: "Device successfully unmounted" 

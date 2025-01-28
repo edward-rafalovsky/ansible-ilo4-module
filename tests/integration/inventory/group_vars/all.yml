@@ -1,0 +1,13 @@
+# No need for environment variable lookups anymore
+ansible_connection: local
+ansible_python_interpreter: /usr/local/bin/python3.9
+
+ilo_ip: "{{ lookup('env', 'ILO_HOST') }}"
+ilo_username: "{{ lookup('env', 'ILO_USERNAME') }}"
+ilo_password: "{{ lookup('env', 'ILO_PASSWORD') }}"
+
+test_user_name: "ansible_test_user"
+test_user_password: "Test123!@#"
+
+# RAID controller settings
+controller: "Smart HBA H240ar" 

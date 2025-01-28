@@ -1,0 +1,152 @@
+---
+- name: Test iLO Power Management
+  hosts: all
+  gather_facts: no
+  
+  tasks:
+    # Get initial power state
+    - name: Get initial power state
+      ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: initial_state
+
+    - name: Show initial state
+      debug:
+        var: initial_state
+
+    # Power off server (graceful)
+    - name: Power off server gracefully
+      ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: off
+        force: no
+      register: power_off_result
+      when: initial_state.power_state == "on"
+
+    - name: Show power off result
+      debug:
+        var: power_off_result
+      when: initial_state.power_state == "on"
+
+    # Verify server is off
+    - name: Verify server is powered off
+      ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: verify_off
+      when: initial_state.power_state == "on"
+
+    - name: Show verify off result
+      debug:
+        var: verify_off
+      when: initial_state.power_state == "on"
+
+    # Power on server
+    - name: Power on server
+      ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: on
+      register: power_on_result
+
+    - name: Show power on result
+      debug:
+        var: power_on_result
+
+    # Verify server is on
+    - name: Verify server is powered on
+      ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: verify_on
+
+    - name: Show verify on result
+      debug:
+        var: verify_on
+
+    # Reset server
+    - name: Reset server
+      ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: reset
+      register: reset_result
+
+    - name: Show reset result
+      debug:
+        var: reset_result
+
+    # Wait for server to come back
+    - name: Wait for 60 seconds
+      pause:
+        seconds: 60
+
+    # Verify server is back on
+    - name: Verify server is back on after reset
+      ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: verify_after_reset
+
+    - name: Show verify after reset result
+      debug:
+        var: verify_after_reset
+
+    # Power off for final state
+    - name: Power off server for final state
+      hpe.ilo_ssh.ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: off
+        force: yes
+      register: final_power_off
+
+    - name: Show final power off result
+      debug:
+        var: final_power_off
+
+    # Final state verification
+    - name: Wait for power operations to complete
+      pause:
+        seconds: 60
+
+    - name: Get final power state
+      hpe.ilo_ssh.ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: final_state
+
+    - name: Debug final state
+      debug:
+        msg: "Final power state: {{ final_state.power_state }}"
+
+    - name: Assert server is powered off
+      assert:
+        that:
+          - final_state.power_state == "off"
+        fail_msg: "Server should be powered off at the end of tests"
+        success_msg: "Server is correctly powered off"
+
+    - name: Power on server if needed
+      hpe.ilo_ssh.ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: on
+      when: final_state.power_state == "off" 
