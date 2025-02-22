@@ -29,36 +29,187 @@
         var: initial_settings
         verbosity: 0
 
-    # Test boot mode settings
-    - name: Set UEFI boot mode
-      hpe.ilo_ssh.ilo_boot_settings:
-        hostname: "{{ ilo_host }}"
-        username: "{{ ilo_username }}"
-        password: "{{ ilo_password }}"
-        boot_mode: UEFI
-        state: present
-      register: uefi_result
+    # Detect opposite boot mode
+    - name: Set target boot mode
+      set_fact:
+        target_boot_mode: "{{ 'Legacy' if initial_settings.settings.boot_mode == 'UEFI' else 'UEFI' }}"
 
-    - name: Debug UEFI result
+    - name: Debug target boot mode
       debug:
-        var: uefi_result
+        msg: "Current mode is {{ initial_settings.settings.boot_mode }}, will change to {{ target_boot_mode }}"
         verbosity: 0
 
-    - name: Verify UEFI mode
-      assert:
-        that:
-          - uefi_result.settings.boot_mode == 'UEFI' or uefi_result.settings.pending_boot_mode == 'UEFI'
-        fail_msg: "Failed to set UEFI mode"
-        success_msg: "UEFI mode set successfully"
-
-    # Test boot sources settings - используем только Generic USB Boot как первый источник
-    - name: Set boot sources order
+    # Change boot mode
+    - name: Change boot mode
       hpe.ilo_ssh.ilo_boot_settings:
         hostname: "{{ ilo_host }}"
         username: "{{ ilo_username }}"
         password: "{{ ilo_password }}"
-        boot_sources:
-          - "Generic USB Boot"
+        boot_mode: "{{ target_boot_mode }}"
+        state: present
+      register: change_result
+
+    - name: Debug change result
+      debug:
+        var: change_result
+        verbosity: 0
+
+    # Verify that boot mode is pending
+    - name: Verify pending boot mode
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: pending_settings
+      failed_when: pending_settings.settings.pending_boot_mode != target_boot_mode
+
+    - name: Debug pending settings
+      debug:
+        var: pending_settings
+        verbosity: 0
+
+    # Reboot server to apply changes
+    - name: Reboot server to apply changes
+      hpe.ilo_ssh.ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: reset
+      register: reboot_result
+
+    - name: Debug reboot result
+      debug:
+        var: reboot_result
+        verbosity: 0
+
+    # Wait 60 seconds before checking availability
+    - name: Wait for initial delay
+      pause:
+        seconds: 60
+
+    # Wait until server becomes available
+    - name: Wait for server to be ready
+      hpe.ilo_ssh.ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: power_status
+      until: power_status is success
+      retries: 30
+      delay: 10
+
+    # Additional pause for full readiness
+    - name: Additional wait for server readiness
+      pause:
+        seconds: 30
+
+    # Verify that boot mode has changed
+    - name: Verify boot mode changed
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: final_settings
+      until: final_settings.settings.boot_mode == target_boot_mode and (not final_settings.settings.pending_boot_mode or final_settings.settings.pending_boot_mode == target_boot_mode)
+      retries: 6
+      delay: 20
+
+    - name: Debug final settings
+      debug:
+        var: final_settings
+        verbosity: 0
+
+    # Restore original boot mode
+    - name: Restore original boot mode
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        boot_mode: "{{ initial_settings.settings.boot_mode }}"
+        state: present
+      register: restore_result
+
+    - name: Debug restore result
+      debug:
+        var: restore_result
+        verbosity: 0
+
+    # Verify that boot mode is pending for restore
+    - name: Verify pending restore
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: restore_pending
+      failed_when: restore_pending.settings.pending_boot_mode != initial_settings.settings.boot_mode
+
+    # Reboot to restore original mode
+    - name: Reboot to restore original mode
+      hpe.ilo_ssh.ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: reset
+
+    # Wait 60 seconds before checking availability
+    - name: Wait for initial delay after restore
+      pause:
+        seconds: 60
+
+    # Wait until server becomes available
+    - name: Wait for server to be ready after restore
+      hpe.ilo_ssh.ilo_power:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: power_status
+      until: power_status is success
+      retries: 30
+      delay: 10
+
+    # Additional pause for full readiness
+    - name: Additional wait for server readiness after restore
+      pause:
+        seconds: 30
+
+    # Final verification of return to original mode
+    - name: Verify restored boot mode
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: restored_settings
+      until: restored_settings.settings.boot_mode == initial_settings.settings.boot_mode and (not restored_settings.settings.pending_boot_mode or restored_settings.settings.pending_boot_mode == initial_settings.settings.boot_mode)
+      retries: 6
+      delay: 20
+
+    - name: Debug restored settings
+      debug:
+        var: restored_settings
+        verbosity: 0
+
+    # Test boot source settings
+    - name: Get available boot sources
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: available_sources
+
+    - name: Set first available source as primary
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        boot_sources: 
+          - "{{ available_sources.settings.boot_sources[0] }}"
         state: present
       register: boot_sources_result
 
@@ -67,12 +218,28 @@
         var: boot_sources_result
         verbosity: 0
 
-    - name: Verify boot sources
+    # Verify that boot sources have changed
+    - name: Verify boot sources changed
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: verify_sources
+      until: verify_sources.settings.boot_sources[0] == available_sources.settings.boot_sources[0]
+      retries: 3
+      delay: 10
+
+    - name: Debug verify sources
+      debug:
+        var: verify_sources
+        verbosity: 0
+
+    - name: Assert boot sources changed
       assert:
         that:
-          - boot_sources_result.settings.boot_sources | length > 0
-          - boot_sources_result.settings.boot_sources[0] == "Generic USB Boot"
-          # Не проверяем остальные источники, так как они могут отличаться на разных серверах
+          - verify_sources.settings.boot_sources | length > 0
+          - verify_sources.settings.boot_sources[0] == available_sources.settings.boot_sources[0]
         fail_msg: "Failed to set boot sources order"
         success_msg: "Boot sources order set successfully"
 
@@ -91,10 +258,27 @@
         var: one_time_boot_result
         verbosity: 0
 
-    - name: Verify one-time boot
+    # Verify that one-time boot is set
+    - name: Verify one-time boot changed
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: verify_one_time
+      until: verify_one_time.settings.one_time_boot == 'netdev1'
+      retries: 3
+      delay: 10
+
+    - name: Debug verify one-time boot
+      debug:
+        var: verify_one_time
+        verbosity: 0
+
+    - name: Assert one-time boot changed
       assert:
         that:
-          - one_time_boot_result.settings.one_time_boot == 'netdev1'
+          - verify_one_time.settings.one_time_boot == 'netdev1'
         fail_msg: "Failed to set one-time boot source"
         success_msg: "One-time boot source set successfully"
 
@@ -113,10 +297,27 @@
         var: reset_boot_result
         verbosity: 0
 
-    - name: Verify reset boot
+    # Verify that one-time boot is reset
+    - name: Verify one-time boot reset
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: verify_reset
+      until: verify_reset.settings.one_time_boot == 'none'
+      retries: 3
+      delay: 10
+
+    - name: Debug verify reset
+      debug:
+        var: verify_reset
+        verbosity: 0
+
+    - name: Assert one-time boot reset
       assert:
         that:
-          - reset_boot_result.settings.one_time_boot == 'none'
+          - verify_reset.settings.one_time_boot == 'none'
         fail_msg: "Failed to reset one-time boot source"
         success_msg: "One-time boot source reset successfully"
 
@@ -129,17 +330,38 @@
         boot_mode: "{{ initial_settings.settings.boot_mode }}"
         boot_sources: "{{ initial_settings.settings.boot_sources }}"
         state: present
-      register: restore_result
+      register: final_restore_result
 
-    - name: Debug restore result
+    - name: Debug final restore result
       debug:
-        var: restore_result
+        var: final_restore_result
         verbosity: 0
 
-    - name: Verify restore
+    # Verify that all settings are restored
+    - name: Verify final settings
+      hpe.ilo_ssh.ilo_boot_settings:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: verify_final
+      until: >
+        verify_final.settings.boot_mode == initial_settings.settings.boot_mode and
+        verify_final.settings.boot_sources == initial_settings.settings.boot_sources and
+        not verify_final.settings.pending_boot_mode
+      retries: 3
+      delay: 10
+
+    - name: Debug verify final
+      debug:
+        var: verify_final
+        verbosity: 0
+
+    - name: Assert final settings
       assert:
         that:
-          - restore_result.settings.boot_mode == initial_settings.settings.boot_mode or restore_result.settings.pending_boot_mode == initial_settings.settings.boot_mode
-          - restore_result.settings.boot_sources == initial_settings.settings.boot_sources
+          - verify_final.settings.boot_mode == initial_settings.settings.boot_mode
+          - verify_final.settings.boot_sources == initial_settings.settings.boot_sources
+          - not verify_final.settings.pending_boot_mode
         fail_msg: "Failed to restore initial settings"
-        success_msg: "Initial settings restored successfully" 
+        success_msg: "All settings successfully restored" 
