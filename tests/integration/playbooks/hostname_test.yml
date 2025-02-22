@@ -1,0 +1,131 @@
+---
+- name: Test iLO Hostname Management
+  hosts: all
+  gather_facts: no
+  vars:
+    test_hostname_1: "{{ ilo_hostname | default('test-ilo-server-1') }}"
+    test_hostname_2: "test-ilo-server-2"
+  
+  tasks:
+    # Get initial hostname
+    - name: Get initial hostname
+      hpe.ilo_ssh.ilo_hostname:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: initial_state
+
+    - name: Show initial hostname
+      debug:
+        var: initial_state
+
+    # Set first test hostname
+    - name: Set first test hostname
+      hpe.ilo_ssh.ilo_hostname:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: present
+        ilo_hostname: "{{ test_hostname_1 }}"
+      register: set_result
+
+    - name: Show set result
+      debug:
+        var: set_result
+
+    # Verify hostname was changed
+    - name: Verify hostname was changed
+      hpe.ilo_ssh.ilo_hostname:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: verify_state
+
+    - name: Show verify result
+      debug:
+        var: verify_state
+
+    - name: Assert hostname was changed
+      assert:
+        that:
+          - set_result.changed == (verify_state.hostname != initial_state.hostname)
+        fail_msg: "Hostname change status was not reported correctly"
+        success_msg: "Hostname change status was reported successfully"
+
+    # Set second test hostname
+    - name: Set second test hostname
+      hpe.ilo_ssh.ilo_hostname:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: present
+        ilo_hostname: "{{ test_hostname_2 }}"
+      register: second_set_result
+
+    - name: Get hostname after second change
+      hpe.ilo_ssh.ilo_hostname:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: second_verify_state
+
+    - name: Assert second hostname change
+      assert:
+        that:
+          - second_set_result.changed == (second_verify_state.hostname != verify_state.hostname)
+        fail_msg: "Second hostname change not reported correctly"
+        success_msg: "Second hostname change successful"
+
+    # Try to set same hostname (should not change)
+    - name: Set same hostname again
+      hpe.ilo_ssh.ilo_hostname:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: present
+        ilo_hostname: "{{ test_hostname_2 }}"
+      register: no_change_result
+
+    - name: Show no change result
+      debug:
+        var: no_change_result
+
+    - name: Assert no change when setting same hostname
+      assert:
+        that:
+          - no_change_result.changed == false
+        fail_msg: "Setting same hostname should not report as changed"
+        success_msg: "No change reported when setting same hostname"
+
+    # Restore original hostname
+    - name: Restore original hostname
+      hpe.ilo_ssh.ilo_hostname:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: present
+        ilo_hostname: "{{ initial_state.hostname }}"
+      register: restore_result
+
+    - name: Show restore result
+      debug:
+        var: restore_result
+
+    # Final verification
+    - name: Get final hostname
+      hpe.ilo_ssh.ilo_hostname:
+        hostname: "{{ ilo_host }}"
+        username: "{{ ilo_username }}"
+        password: "{{ ilo_password }}"
+        state: get
+      register: final_state
+
+    - name: Assert hostname was restored
+      assert:
+        that:
+          - final_state.hostname == initial_state.hostname
+        fail_msg: "Failed to restore original hostname"
+        success_msg: "Original hostname restored successfully" 
