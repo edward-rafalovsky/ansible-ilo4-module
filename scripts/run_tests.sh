@@ -36,8 +36,11 @@ case "$1" in
   "raid")
     docker run --rm -v $(pwd):/root/.ansible/collections/ansible_collections/hpe/ilo_ssh --env-file .env hpe-ilo-ssh-module ansible-playbook -i tests/integration/inventory/hosts.yml tests/integration/playbooks/raid_test.yml -v
     ;;
+  "hostname")
+    docker run --rm -v $(pwd):/root/.ansible/collections/ansible_collections/hpe/ilo_ssh --env-file .env hpe-ilo-ssh-module ansible-playbook -i tests/integration/inventory/hosts.yml tests/integration/playbooks/hostname_test.yml -v
+    ;;
   *)
-    echo "Usage: $0 {unit|integration|user|power|power_settings|boot_settings|virtual_media|raid}"
+    echo "Usage: $0 {unit|integration|user|power|power_settings|boot_settings|virtual_media|raid|hostname}"
     exit 1
     ;;
 esac 
