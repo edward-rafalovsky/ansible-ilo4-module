@@ -46,6 +46,10 @@ options:
         type: str
         default: present
         choices: ['present', 'get']
+    reboot:
+        description: Whether to reboot the server if required to apply boot mode changes
+        type: bool
+        default: false
 '''
 
 EXAMPLES = '''
@@ -115,6 +119,9 @@ from ansible.module_utils.basic import AnsibleModule
 from ansible_collections.hpe.ilo_ssh.plugins.module_utils.ilo_base import IloBaseModule
 import time
 import re
+import os
+import requests
+import urllib3
 
 class IloBootSettingsModule(IloBaseModule):
     def __init__(self):
@@ -126,7 +133,8 @@ class IloBootSettingsModule(IloBaseModule):
                 boot_mode=dict(type='str', required=False, choices=['UEFI', 'Legacy']),
                 boot_sources=dict(type='list', elements='str', required=False),
                 one_time_boot=dict(type='str', required=False, choices=['none', 'usb', 'ip', 'smartstartLX', 'netdev1']),
-                state=dict(type='str', default='present', choices=['present', 'get'])
+                state=dict(type='str', default='present', choices=['present', 'get']),
+                reboot=dict(type='bool', default=False)
             ),
             supports_check_mode=True
         )
@@ -140,6 +148,7 @@ class IloBootSettingsModule(IloBaseModule):
         self.boot_sources = self.module.params['boot_sources']
         self.one_time_boot = self.module.params['one_time_boot']
         self.state = self.module.params['state']
+        self.reboot = self.module.params['reboot']
 
     def get_boot_settings(self):
         """Get current boot settings"""
@@ -251,7 +260,7 @@ class IloBootSettingsModule(IloBaseModule):
         # Get current boot sources mapping
         source_mapping = {}  # Maps source description to number
         for i in range(1, 6):  # iLO typically has 5 boot sources
-            success, stdout, stderr = self.execute_command(f'show /system1/bootconfig1/oemhp_uefibootsource{i}')
+            success, stdout, stderr = self.execute_command(f'show /system1/bootconfig1/oemhp_uefibootsource{i}', timeout=5)
             if not success:
                 continue
                 
@@ -268,14 +277,11 @@ class IloBootSettingsModule(IloBaseModule):
             source_num = source_mapping[source]
             command = f"set /system1/bootconfig1/oemhp_uefibootsource{source_num} bootorder={order}"
             self.log(f"Executing command: {command}")
-            success, stdout, stderr = self.execute_command(command)
+            success, stdout, stderr = self.execute_command(command, timeout=5)
             if not success:
                 self.module.fail_json(msg=f"Failed to set boot order for source {source}: {stderr}")
             self.log(f"Command output: {stdout}")
             
-        # Wait a bit for settings to take effect
-        time.sleep(2)
-        
         # Verify changes
         current_settings = self.get_boot_settings()
         self.log(f"Current settings: {current_settings}")
@@ -295,29 +301,116 @@ class IloBootSettingsModule(IloBaseModule):
         initial_settings = self.get_boot_settings()
         self.log(f"Initial settings: {initial_settings}")
         
-        # Check if mode is already set
-        if initial_settings['boot_mode'] == mode:
+        # Check if mode is already set or pending
+        if initial_settings['boot_mode'] == mode and not initial_settings['pending_boot_mode']:
+            self.log(f"Boot mode is already set to {mode} with no pending changes")
+            return False
+            
+        # If there's a pending change to a different mode, we need to change it
+        if initial_settings['pending_boot_mode']:
+            if initial_settings['pending_boot_mode'] == mode:
+                self.log(f"Boot mode {mode} is already pending")
+                if self.reboot:
+                    self.log("Rebooting to apply pending changes")
+                else:
+                    self.log("Reboot required but not enabled")
+                    return False
+            else:
+                self.log(f"Need to change pending boot mode from {initial_settings['pending_boot_mode']} to {mode}")
+        elif initial_settings['boot_mode'] != mode:
+            self.log(f"Need to change boot mode from {initial_settings['boot_mode']} to {mode}")
+        else:
             self.log(f"Boot mode is already set to {mode}")
             return False
         
-        command = f"set /system1/bootconfig1 oemhp_bootmode={mode}"
-        self.log(f"Executing command: {command}")
-        success, stdout, stderr = self.execute_command(command)
-        if not success:
-            self.module.fail_json(msg=f"Failed to set boot mode: {stderr}")
-        self.log(f"Command output: {stdout}")
-        
-        # Wait a bit for the setting to take effect
-        time.sleep(2)
-        
-        # Verify changes
-        current_settings = self.get_boot_settings()
-        self.log(f"Current settings: {current_settings}")
-        
-        if current_settings['boot_mode'] != mode and current_settings['pending_boot_mode'] != mode:
-            self.module.fail_json(msg=f"Failed to set boot mode. Expected {mode}, got {current_settings['boot_mode']} (pending: {current_settings['pending_boot_mode']})")
-        
-        return current_settings['boot_mode'] != initial_settings['boot_mode'] or current_settings['pending_boot_mode'] != initial_settings['pending_boot_mode']
+        # Create RIBCL XML
+        xml = f"""<?xml version="1.0"?>
+<RIBCL VERSION="2.0">
+<LOGIN USER_LOGIN="{self.username}" PASSWORD="{self.password}">
+<SERVER_INFO MODE="write">
+<SET_PENDING_BOOT_MODE VALUE="{mode}"/>
+</SERVER_INFO>
+</LOGIN>
+</RIBCL>"""
+
+        try:
+            # Disable SSL warnings
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            
+            # Send XML via RIBCL API with timeout
+            response = requests.post(
+                f"https://{self.hostname}/ribcl",
+                data=xml,
+                verify=False,
+                auth=(self.username, self.password),
+                headers={'Content-Type': 'application/xml'},
+                timeout=10
+            )
+            
+            self.log(f"Response status code: {response.status_code}")
+            
+            if response.status_code != 200:
+                self.module.fail_json(msg=f"Server returned status code {response.status_code}")
+            
+            response_text = response.content.decode('utf-8', errors='ignore')
+            self.log(f"Response XML:\n{response_text}")
+            
+            # Check for success in RIBCL response
+            if 'STATUS="0x0000"' not in response_text:
+                error_msg = "Unknown error"
+                match = re.search(r'MESSAGE="([^"]*)"', response_text)
+                if match:
+                    error_msg = match.group(1)
+                self.module.fail_json(msg=f"RIBCL command failed: {error_msg}")
+            
+            # Verify changes
+            current_settings = self.get_boot_settings()
+            self.log(f"Current settings: {current_settings}")
+            
+            # Check if mode is set or pending
+            if current_settings['boot_mode'] != mode and current_settings['pending_boot_mode'] != mode:
+                self.module.fail_json(msg=f"Failed to set boot mode. Expected {mode} to be set or pending, got {current_settings['boot_mode']} (pending: {current_settings['pending_boot_mode']})")
+            
+            # If reboot is enabled and boot mode is pending, reboot the server
+            if self.reboot and current_settings['pending_boot_mode'] == mode:
+                self.log("Rebooting server to apply boot mode changes")
+                command = "power reset"
+                success, stdout, stderr = self.execute_command(command, timeout=10)
+                if not success:
+                    self.module.fail_json(msg=f"Failed to reboot server: {stderr}")
+                self.log(f"Server reboot initiated: {stdout}")
+                
+                # Wait for reboot to complete
+                # Initial wait reduced to 30 seconds as iLO usually responds by then
+                time.sleep(30)
+                
+                # Try to verify settings up to 3 times with short intervals
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        final_settings = self.get_boot_settings()
+                        
+                        # Check if boot mode is set correctly and no pending changes
+                        if final_settings['boot_mode'] == mode and not final_settings['pending_boot_mode']:
+                            self.log("Boot mode change completed successfully")
+                            return True
+                            
+                        self.log(f"Boot mode not yet applied (attempt {attempt + 1}/{max_retries}): {final_settings}")
+                        if attempt < max_retries - 1:
+                            time.sleep(5)  # Short wait between attempts
+                            
+                    except Exception as e:
+                        self.log(f"Failed to verify settings (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                        if attempt < max_retries - 1:
+                            time.sleep(5)
+                
+                self.module.fail_json(msg=f"Failed to apply boot mode change after reboot. Current settings: {final_settings}")
+            
+            return True
+            
+        except Exception as e:
+            self.module.fail_json(msg=f"Failed to set boot mode: {str(e)}")
+            return False
 
     def set_one_time_boot(self, source):
         """Set one-time boot source"""
@@ -337,17 +430,14 @@ class IloBootSettingsModule(IloBaseModule):
         # Set one-time boot source using ONETIMEBOOT command
         command = f"onetimeboot {source}"
         self.log(f"Executing command: {command}")
-        success, stdout, stderr = self.execute_command(command)
+        success, stdout, stderr = self.execute_command(command, timeout=5)
         if not success:
             self.module.fail_json(msg=f"Failed to set one-time boot source: {stderr}")
         self.log(f"Command output: {stdout}")
         
-        # Wait a bit for settings to take effect
-        time.sleep(2)
-        
         # Get current settings to verify
         command = "onetimeboot"
-        success, stdout, stderr = self.execute_command(command)
+        success, stdout, stderr = self.execute_command(command, timeout=5)
         if not success:
             self.module.fail_json(msg=f"Failed to verify one-time boot source: {stderr}")
             
